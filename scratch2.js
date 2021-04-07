@@ -29,8 +29,6 @@ for (var t = 0; t < T; t++) {
                 trade_id = i;
                 trade = 1;
             }
-        } else {
-            continue;
         }
     }
 }

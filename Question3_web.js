@@ -1,21 +1,6 @@
-var stocks_id = ["A", "B", "C"];
+var stocks_id = [0, 1, 2];
 var tax = 0.01;
-
 var a_tax = 1 - tax;
-// var sortMax = function (arr) {
-//     var max = Math.max.apply(null, arr),
-//         maxi = arr.indexOf(max),
-//         min = Math.min.apply(null, arr),
-//         mini = arr.indexOf(min),
-//         Max = [{id: maxi, "diff": max}];
-//     arr[maxi] = -Infinity;
-//     max_second = Math.max.apply(null, arr);
-//     maxi_second = arr.indexOf(secondMax);
-//     Max.push({id: maxi_second, "diff": max_second});
-//     Max.push({id: mini, "diff": min});
-//     arr[maxi] = max;
-//     return Max;
-// };
 
 class Market {
     constructor(id) {
@@ -172,12 +157,12 @@ class Portfolio {
 
     // check if make trade decision
     checkPosition(trend, time, market) {
-        const checkTradability = function (trend) {
-            return true;
-        }
-
-        const checkBalance = function (price) {
-            return this.balance >= price * 10000;
+        const checkBalance = function (price, opened_pos) {
+            var pos = 0;
+            if (opened_pos > 0) {
+                pos = opened_pos
+            }
+            return this.balance >= price * (10000 - pos) * (1 + tax);
         }
 
         const checkIfRebalance = function (p1, p1_i, p2_i, x, mode) {
@@ -228,14 +213,14 @@ class Portfolio {
                         pos_left = pos[i].amount;
                         // sort relatively high price point
                         for (var iii = t - count[id]; iii < t + count[id]; iii++) {
-                            if (pos_closed[ii][iii] >= 10000) {
+                            if (pos_closed[ii][iii] >= 10000 || iii === pos[i].start_time) {
                                 continue;
-                            } else {
-                                if (pos_closed[ii][iii] + pos_left >= 10000) {
-                                    pos_left -= 10000 - pos_closed[ii][iii];
-                                    pos_closed[ii][iii] = 10000;
-                                    continue;
-                                }
+                            }
+                            if (pos_closed[ii][iii] + pos_left >= 10000) {
+                                pos_left -= 10000 - pos_closed[ii][iii];
+                                pos_closed[ii][iii] = 10000;
+                                continue;
+
                             }
                             p1[ii] = market.checkPrice(t, iii);
                             if (p1[ii] > p1_temp) {
@@ -246,7 +231,7 @@ class Portfolio {
                         p1[ii] = p1_temp;
                         t_st = time_temp;
                     }
-                    // if the 1st trade witnin same ID
+                    // if the 1st trade within same ID
                     else {
                         pos_left = pos[i].amount;
                         p1[ii] = market.checkPrice(t, ii);
@@ -307,11 +292,34 @@ class Portfolio {
             return cmd;
         }
 
+        const fillPosition = function (pos_x, p1, p2, id, time, mode) {
+            var cmd =
+                {
+                    filled: false,
+                    commands: [],
+                    cash_used: 0
+                }
+
+            if (checkIfTrade(p1, p2)) {
+                var amount_temp = 10000 - pos_x;
+                cmd.commands.push(
+                    {
+                        type: "buy",
+                        id: id,
+                        time: time,
+                        amount: amount_temp
+                    });
+                cmd.filled = true;
+                cmd.cash_used = amount_temp * a_tax * p1;
+            }
+            return cmd;
+        }
+
         // if bear
         if (trend[0].trend === "bear") {
             // !isTrading
             if (this.position.isTrading === false) {
-                return {skip: true};
+                // return {skip: true};
             }
 
             // opened pos exist
@@ -363,31 +371,62 @@ class Portfolio {
             this.logOngoingTrends(trend, "newSeq");
 
             // check if make trades
+            var cmd_ii = {commands: null};
             // *if no opened pos
             if (this.position.isTrading === false) {
+                var id_temp = this.history_trend[0].id;
+                var startTime_temp = this.history_trend[0].start_time;
+                var open_cmd = [];
                 // if balance below trading limit
-                if (!checkBalance(this.current_trend[0].start_price)) {
+                if (!checkBalance(this.history_trend[0].start_price, this.position.trades[id_temp][startTime_temp])) {
                     var p1 = this.history_trend[0].start_price;
                     var p2 = this.history_trend[0].end_price;
 
-                    if (checkIfTrade(p1, p2, a_tax)) {
-                        return {
-                            commands: [
-                                {
-                                    type: "buy",
-                                    id: this.history_trend[0].id,
-                                    time: this.history_trend[0].start_time,
-                                    amount: Math.floor(this.balance / p1)
-                                }
-                            ]
-                        };
+                    if (checkIfTrade(p1, p2)) {
+                        open_cmd.push(
+                            {
+                                commands: [
+                                    {
+                                        type: "buy",
+                                        id: this.history_trend[0].id,
+                                        time: this.history_trend[0].start_time,
+                                        amount: Math.floor(this.balance / p1)
+                                    }
+                                ]
+                            }
+                        );
                     } else {
                         return {skip: true};
                     }
                 }
                 // if balance above trading limit
                 else {
+                    var count = 0;
+                    var cash_left = this.balance;
+
+                    for (var i = this.history_trend[0].start_time; i < this.history_trend[0].end_time; i++) {
+                        for (var ii = 0; ii < 3; ii++) {
+                            if (this.history_trend[ii].trend === "bear") {
+                                continue;
+                            }
+                            var p1 = this.history_trend[ii].start_price;
+                            var p2 = this.history_trend[ii].end_price;
+                            var cmd = {};
+
+                            id_temp = this.history_trend[ii].id;
+                            startTime_temp = this.history_trend[ii].start_time; // redundant
+
+                            cmd = fillPosition(this.position.trades[id_temp][startTime_temp], p1, p2, id_temp, startTime_temp);
+                            if (cmd.filled === false && ii === 0 && count === 0) {
+                                return {skip: true};
+                            }
+                            cash_left -= cmd.cash_used;
+                        }
+                        count += 1;
+                    }
+                    open_cmd = cmd.commands;
                 }
+                cmd_ii.commands = open_cmd;
             }
             // *if opened pos exist
             else {
@@ -395,38 +434,52 @@ class Portfolio {
                     if (this.position.opened_position === []) {
                         throw "noTrades";
                     }
-
-                    // (Multi opened pos)
-                    if (this.position.opened_position.length > 1) {
-                    }
-                    // (Only one opened pos) - check if rebalance
-                    else {
-                        var id = this.position.opened_position[0].id;
-                        var p1 = this.position.opened_position[0].start_price;
-                        var p2 = this.history_trend[0].end_price;
-                        var p1_n = this.current_trend[0].start_price;
-                        var p2_n = this.current_trend[0].end_price;
-
-                        if (checkIfRebalance(p1, p2, p1_n, p2_n, a_tax)) {
-                            var rebalance_cmd = [
+                    var pos_checked_i = checkIfClose(this.position.opened_position, time, market);
+                    var close_cmd_i = [];
+                    for (var iii = 0; iii < pos_checked_i.length; iii++) {
+                        if (pos_checked_i[ii].ifClose === true) {
+                            close_cmd_i.push(
                                 {
                                     type: "sell",
-                                    id: id,
-                                    time: this.current_trend[0].start_price,
-                                    amount: this.position.opened_position[0].amount
-                                },
-                                {
-                                    type: "buy",
-                                    id: this.current_trend[0].id,
-                                    time: this.current_trend[0].start_time,
-                                    amount: Math.floor(this.balance / this.current_trend[0].start_price)
+                                    id: pos_checked_i[iii].id,
+                                    time: pos_checked_i[iii].time,
+                                    amount: pos_checked_i[iii].amount
                                 }
-                            ]
-                            return {commands: rebalance_cmd};
-                        } else {
-                            return {skip: true}
+                            )
                         }
                     }
+                    cmd_ii.commands = cmd_ii.commands.concat(close_cmd_i);
+                    // // (Multi opened pos)
+                    // if (this.position.opened_position.length > 1) {
+                    // }
+                    // // (Only one opened pos) - check if rebalance
+                    // else {
+                    //     var id = this.position.opened_position[0].id;
+                    //     var p1i = this.position.opened_position[0].start_price;
+                    //     var p2i = this.history_trend[0].end_price;
+                    //     var p1i_n = this.current_trend[0].start_price;
+                    //     var p2i_n = this.current_trend[0].end_price;
+                    //
+                    //     if (checkIfRebalance(p1i, p2i, p1i_n, p2i_n)) {
+                    //         var rebalance_cmd = [
+                    //             {
+                    //                 type: "sell",
+                    //                 id: id,
+                    //                 time: this.current_trend[0].start_price,
+                    //                 amount: this.position.opened_position[0].amount
+                    //             },
+                    //             {
+                    //                 type: "buy",
+                    //                 id: this.current_trend[0].id,
+                    //                 time: this.current_trend[0].start_time,
+                    //                 amount: Math.floor(this.balance / this.current_trend[0].start_price)
+                    //             }
+                    //         ]
+                    //         return {commands: rebalance_cmd};
+                    //     } else {
+                    //         return {skip: true}
+                    //     }
+                    // }
                 } catch (err) {
                     if (err === "noTrades") {
                         return {
@@ -436,6 +489,7 @@ class Portfolio {
                     }
                 }
             }
+            return cmd_ii;
         }
     }
 
