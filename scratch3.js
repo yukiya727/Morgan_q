@@ -18,17 +18,17 @@ var a_tax = 1 - tax;
 // };
 
 class Market {
-    constructor(id, hist) {
+    constructor(id) {
         this.marketID = id;
         this.trend = [];
-        this.market_charts = hist;
+        this.market_charts = [];
     }
 
     id_to_num(id) {
         return stocks_id.indexOf(id);
     }
 
-    getHistory() {
+    updateHistory() {
         let charts = [];
         let chart = [];
 
@@ -40,8 +40,14 @@ class Market {
             }
             charts.push(chart)
         }
+        this.market_charts = charts;
         return charts;
     }
+
+    checkTime() {
+        return this.market_charts[0].length
+    }
+
 
     checkPrice(t, id, checkDelta) {
         let i = id;
@@ -80,7 +86,7 @@ class Market {
             Max = [
                 {
                     id: maxi,
-                    trend: market.checkTrend(t - 1, t, maxi),
+                    trend: this.checkTrend(t - 1, t, maxi),
                     price_change: max
                 }
             ];
@@ -90,14 +96,14 @@ class Market {
         Max.push(
             {
                 id: maxi_second,
-                trend: market.checkTrend(t - 1, t, maxi_second),
+                trend: this.checkTrend(t - 1, t, maxi_second),
                 price_change: max_second
             }
         );
         Max.push(
             {
                 id: mini,
-                trend: market.checkTrend(t - 1, t, mini),
+                trend: this.checkTrend(t - 1, t, mini),
                 price_change: min
             }
         );
@@ -165,7 +171,7 @@ class Portfolio {
     }
 
     // check if make trade decision
-    checkPosition(trend, time) {
+    checkPosition(trend, time, market) {
         const checkTradability = function (trend) {
             return true;
         }
@@ -174,17 +180,131 @@ class Portfolio {
             return this.balance >= price * 10000;
         }
 
-        const checkIfRebalance = function (p1, p2, p1_n, p2_n, f) {
-            var x1 = Math.pow(f, 2) * p2_n;
-            x1 *= Math.floor(p1 / p1_n);
-            x1 -= Math.floor(p1 / p1_n) * f * p1_n;
-            var y1 = f * p2 - p1;
+        const checkIfRebalance = function (p1, p1_i, p2_i, x, mode) {
+            var b = x * p1 * (1 - tax);
+            var x_i = Math.floor(b / (p1_i * (1 + tax)));
+            var b_i = b - (x_i * p1_i * (1 + tax));
+            var cash_r = b_i / b;
 
-            return x1 > y1;
+            if (mode === "p2") {
+                return (p1_i * (1 + tax) * (1 + cash_r)) / ((1 - tax) * (1 - cash_r));
+            }
+            return p2_i * (1 - tax) > p1_i * (1 + tax);
         }
 
-        const checkIfTrade = function (p1, p2, f) {
-            return p2 * f > p1;
+        const checkIfTrade = function (p1, p2, mode) {
+            if (mode === "p2") {
+                return (p1 * (1 + tax)) / (1 - tax);
+            }
+            if (mode === "p2_close") {
+                return (p1 * (1 - tax)) / (1 + tax);
+            }
+            return p2 * (1 - tax) > p1 * (1 + tax);
+        }
+
+        const checkIfClose = function (pos, t, market) {
+            var count = [0, 0, 0]
+            var pos_closed = [
+                [], [], []
+            ];
+            var cmd = [];
+
+            for (var i = 0; i < pos.length; i++) {
+                var id = pos[i].id;
+                var amount_filled = 0;
+
+                var p1 = [],
+                    p2_b = [],
+                    p2_s = [];
+                var close_t = [];
+                var t_st = 0,
+                    pos_left = 0;
+                // check threshold
+                for (var ii = 0; ii < 3; ii++) {
+                    // if more than 1 trade within same ID
+                    if (count[id] >= 1) {
+                        var p1_temp = 0,
+                            time_temp = 0;
+                        pos_left = pos[i].amount;
+                        // sort relatively high price point
+                        for (var iii = t - count[id]; iii < t + count[id]; iii++) {
+                            if (pos_closed[ii][iii] >= 10000) {
+                                continue;
+                            } else {
+                                if (pos_closed[ii][iii] + pos_left >= 10000) {
+                                    pos_left -= 10000 - pos_closed[ii][iii];
+                                    pos_closed[ii][iii] = 10000;
+                                    continue;
+                                }
+                            }
+                            p1[ii] = market.checkPrice(t, iii);
+                            if (p1[ii] > p1_temp) {
+                                p1_temp = p1[ii];
+                                time_temp = iii;
+                            }
+                        }
+                        p1[ii] = p1_temp;
+                        t_st = time_temp;
+                    }
+                    // if the 1st trade witnin same ID
+                    else {
+                        pos_left = pos[i].amount;
+                        p1[ii] = market.checkPrice(t, ii);
+                        t_st = t;
+                    }
+                    amount_filled = pos_left;
+                    p2_s[ii] = checkIfTrade(p1[ii], null, "p2_close");
+
+                    if (ii === id) {
+                        p2_b[ii] = checkIfTrade(p1[ii], null, "p2");
+                    } else {
+                        p2_b[ii] = checkIfRebalance(market.checkPrice(t_st, id), p1[ii], null, pos[i].amount, "p2");
+                    }
+
+                    // check the time each stock reaches threshold
+                    for (var iii = t_st; iii < market.checkTime(); iii++) {
+                        if (market.checkPrice(iii, ii) > p2_b[ii]) {
+                            close_t[ii] = {
+                                type: "flow",
+                                time: iii
+                            }
+                            break;
+                        }
+                        if (market.checkPrice(iii, ii) < p2_s[ii]) {
+                            close_t[ii] = {
+                                type: "blow",
+                                time: iii
+                            }
+                            break;
+                        }
+                    }
+                }
+                // sort time at threshold
+                const min = Math.min.apply(Math, close_t.map(function (o) {
+                    return o.time;
+                }));
+                const mini = close_t.findIndex(function (close_t) {
+                    return close_t.time === min;
+                });
+                const min_type = close_t[mini].type;
+                // final step - add commands
+                if (min_type === "flow") {
+                    cmd[i] = {
+                        ifClose: false
+                    }
+                } else {
+                    cmd[i] = {
+                        id: id,
+                        ifClose: true,
+                        time: t_st,
+                        amount: amount_filled
+                    }
+                    pos_closed[id][t_st] = amount_filled;
+                }
+
+                count[id] += 1;
+            }
+            return cmd;
         }
 
         // if bear
@@ -202,34 +322,21 @@ class Portfolio {
                     }
                     // log end of the trends
                     this.logOngoingTrends(trend, "Bear");
-                    // close all pos
+                    // check all pos
+                    const pos_checked = checkIfClose(this.position.opened_position, time, market);
                     var close_cmd = [];
-                    var id_prev = null;
-
-                    for (var i = 0; i <= this.position.opened_position.length; i++) {
-                        if (id_prev === this.position.opened_position[i].id) {
-                            market.checkPrice(,id_prev)
-
+                    for (var ii = 0; ii < pos_checked.length; ii++) {
+                        if (pos_checked[ii].ifClose === true) {
                             close_cmd.push(
                                 {
                                     type: "sell",
-                                    id: this.position.opened_position[i].id,
-                                    time: this.current_trend[0].start_time,
-                                    amount: this.position.opened_position[i].amount
+                                    id: pos_checked[ii].id,
+                                    time: pos_checked[ii].time,
+                                    amount: pos_checked[ii].amount
                                 }
                             )
                         }
-                        close_cmd.push(
-                            {
-                                type: "sell",
-                                id: this.position.opened_position[i].id,
-                                time: this.current_trend[0].start_time,
-                                amount: this.position.opened_position[i].amount
-                            }
-                        )
-                        id_prev = this.position.opened_position[i].id;
                     }
-
                     return {commands: close_cmd};
                 } catch (err) {
                     if (err === "noTrades") {
@@ -260,16 +367,16 @@ class Portfolio {
             if (this.position.isTrading === false) {
                 // if balance below trading limit
                 if (!checkBalance(this.current_trend[0].start_price)) {
-                    var p1 = this.current_trend[0].start_price;
-                    var p2 = this.current_trend[0].end_price;
+                    var p1 = this.history_trend[0].start_price;
+                    var p2 = this.history_trend[0].end_price;
 
                     if (checkIfTrade(p1, p2, a_tax)) {
                         return {
                             commands: [
                                 {
                                     type: "buy",
-                                    id: this.current_trend[0].id,
-                                    time: this.current_trend[0].start_time,
+                                    id: this.history_trend[0].id,
+                                    time: this.history_trend[0].start_time,
                                     amount: Math.floor(this.balance / p1)
                                 }
                             ]
@@ -296,7 +403,7 @@ class Portfolio {
                     else {
                         var id = this.position.opened_position[0].id;
                         var p1 = this.position.opened_position[0].start_price;
-                        var p2 = this.position.opened_position[0].end_price;
+                        var p2 = this.history_trend[0].end_price;
                         var p1_n = this.current_trend[0].start_price;
                         var p2_n = this.current_trend[0].end_price;
 
@@ -365,8 +472,8 @@ var trade = function (cmds, t) {
 }
 
 
-let market = new Market(0, history_chart);
-let history_chart = market.getHistory();
+let market = new Market(0);
+let history_chart = market.updateHistory();
 let Q3 = new Portfolio(2);
 
 // start from time(1)
@@ -382,7 +489,7 @@ for (let t = 1; t < T;) {
 
     sorted_trend = market.sortTrend(unsorted_trend, t);
 
-    let commands = Q3.checkPosition(sorted_trend, t-1);
+    let commands = Q3.checkPosition(sorted_trend, t - 1, market);
 
     // if no need to trade, continue
     if (commands.skip === true) {
