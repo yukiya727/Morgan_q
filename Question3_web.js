@@ -543,7 +543,7 @@ for (let t = 1; t < T;) {
 
     sorted_trend = market.sortTrend(unsorted_trend, t);
 
-    let commands = Q3.checkPosition(sorted_trend, t - 1, market);
+    const commands = Q3.checkPosition(sorted_trend, t - 1, market);
 
     // if no need to trade, continue
     if (commands.skip === true) {
@@ -553,13 +553,13 @@ for (let t = 1; t < T;) {
     // if (t=T){
     //     Q3.closingMarket();
     // }
-
-    if (Q3.trade_signal()) {
-        trade(Q3.trade_cmd());
+    for(var ii = 0; ii < commands.commands.length; ii++){
+        if (commands.commands[ii].type === "buy") {
+            Q3.buy();
+        }
+        if (commands.commands[ii].type === "sell") {
+            Q3.sell();
+        }
     }
-    if (Q3.rebalance_signal()) {
-        rebalance(Q3.reblance_cmd());
-    }
-
     t++;
 }
