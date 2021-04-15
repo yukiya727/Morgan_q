@@ -1,6 +1,24 @@
-var stocks_id = [0, 1, 2];
-var tax = 0.01;
-var a_tax = 1 - tax;
+var XMLHttpRequest = require("xmlhttprequest").XMLHttpRequest;
+
+var url = "file://F:/WebstormProjects/Morgan_q/prices.csv";
+
+var request = new XMLHttpRequest();
+request.open("GET", url, false);
+request.send(null);
+
+var csvData = new Array();
+var jsonObject = request.responseText.split(/\r?\n|\r/);
+for (var i = 0; i < jsonObject.length; i++) {
+    csvData.push(jsonObject[i].split(','));
+}
+
+csvData.splice(0, 1);
+csvData.splice(-1, 1);
+
+let stocks_id = [0, 1, 2];
+let tax = 0.01;
+let a_tax = 1 - tax;
+const T = csvData.length - 1;
 
 class Market {
     constructor(id) {
@@ -18,14 +36,14 @@ class Market {
         let chart = [];
 
         for (var id = 0; id < 3; id++) {
+            chart = [];
             for (var t = 0; t <= T; t++) {
-                chart = [];
-
-                chart.push({id: id, price: quote(id, t), time: t})
+                chart.push(csvData[t][id + 1]);
             }
             charts.push(chart)
         }
         this.market_charts = charts;
+
         return charts;
     }
 
@@ -42,9 +60,9 @@ class Market {
         }
 
         if (checkDelta === true) {
-            return this.market_charts[i][t].price - this.market_charts[i][t - 1].price;
+            return this.market_charts[i][t] - this.market_charts[i][t - 1];
         } else {
-            return this.market_charts[i][t].price;
+            return this.market_charts[i][t];
         }
     }
 
@@ -77,7 +95,7 @@ class Market {
             ];
         trend[maxi] = -Infinity;
         var max_second = Math.max.apply(null, trend),
-            maxi_second = trend.indexOf(secondMax);
+            maxi_second = trend.indexOf(max_second);
         Max.push(
             {
                 id: maxi_second,
@@ -100,7 +118,7 @@ class Market {
 
 class Portfolio {
     constructor() {
-        this.balance = 1000000;
+        this.balance = 10000;
         this.tickets = [];
         this.position = {
             trades: [
@@ -140,7 +158,7 @@ class Portfolio {
             if (this.current_trend[0].end_price === null) {
                 for (var i = 0; i < trends.length; i++) {
                     this.current_trend[i].end_time = time;
-                    this.current_trend.end_price = market.checkPrice(time, trends[i].id);
+                    this.current_trend[i].end_price = market.checkPrice(time, trends[i].id);
                 }
                 return 0;
             } else {
@@ -174,12 +192,12 @@ class Portfolio {
 
     // check if make trade decision
     checkPosition(trend, time, market) {
-        const checkBalance = function (price, opened_pos) {
+        const checkBalance = function (price, opened_pos, balance) {
             var pos = 0;
             if (opened_pos > 0) {
                 pos = opened_pos
             }
-            return this.balance >= price * (10000 - pos) * (1 + tax);
+            return balance >= price * (10000 - pos) * (1 + tax);
         }
 
         const checkIfRebalance = function (p1, p1_i, p2_i, x, mode) {
@@ -363,7 +381,14 @@ class Portfolio {
                             )
                         }
                     }
-                    return {commands: close_cmd};
+                    if (close_cmd.length > 0) {
+                        return {
+                            skip: false,
+                            commands: close_cmd
+                        };
+                    } else {
+                        return {skip: true};
+                    }
                 } catch (err) {
                     if (err === "noTrades") {
                         return {
@@ -386,7 +411,15 @@ class Portfolio {
         if (this.current_trend[0].id !== trend[0].id
             || this.current_trend[1].id !== trend[1].id) {
             // log new sorted trends
+            // console.log(trend);
             this.logOngoingTrends(trend, "newTrend", time, market);
+
+
+            if (this.history_trend[0] === undefined) {
+                return {
+                    skip: true
+                }
+            }
 
             // check if make trades
             var cmd_ii = {commands: null};
@@ -394,7 +427,7 @@ class Portfolio {
             var startTime_temp = this.history_trend[0].start_time;
             var open_cmd = [];
             // if balance below trading limit
-            if (!checkBalance(this.history_trend[0].start_price, this.position.trades[id_temp][startTime_temp])) {
+            if (!checkBalance(this.history_trend[0].start_price, this.position.trades[id_temp][startTime_temp], this.balance)) {
                 var p1 = this.history_trend[0].start_price;
                 var p2 = this.history_trend[0].end_price;
 
@@ -477,17 +510,21 @@ class Portfolio {
                     }
                 }
             }
-
+            cmd_ii.skip = false;
             return cmd_ii;
+        }
+
+        return {
+            skip: true
         }
     }
 
-    trade(cmd) {
+    trade(cmd, market) {
         for (var i = 0; i < cmd.commands.length; i++) {
             var ticket_id;
             if (cmd.commands[i].type === "buy") {
                 ticket_id = String(cmd.commands[i].id) + String(cmd.commands[i].time) + String(cmd.commands[i].amount);
-                buy(cmd.commands[i].id, cmd.commands[i].time, cmd.commands[i].amount);
+                // buy(cmd.commands[i].id, cmd.commands[i].time, cmd.commands[i].amount);
                 this.position.opened_position.push(
                     {
                         id: cmd.commands[i].id,
@@ -496,9 +533,11 @@ class Portfolio {
                         ticket: ticket_id
                     }
                 )
+                this.balance -= cmd.commands[i].amount * market.checkPrice(cmd.commands[i].time, cmd.commands[i].id);
             }
             if (cmd.commands[i].type === "sell") {
-                sell(cmd.commands[i].id, cmd.commands[i].time, cmd.commands[i].amount);
+                // sell(cmd.commands[i].id, cmd.commands[i].time, cmd.commands[i].amount);
+                this.balance -= cmd.commands[i].amount * market.checkPrice(cmd.commands[i].time, cmd.commands[i].id);
 
                 this.position.opened_position.amount -= cmd.commands[i].amount;
                 if (this.position.opened_position.amount === 0) {
@@ -579,14 +618,14 @@ class Portfolio {
 
 let market = new Market(0);
 let history_chart = market.updateHistory();
-let Q3 = new Portfolio(2);
+let Q3 = new Portfolio();
 
 // start from time(1)
-for (let t = 1; t <= T;) {
+for (let t = 1; t <= T;t++) {
     let commands;
     let sorted_trend = [],
         unsorted_trend = [];
-    if (t = T) {
+    if (t === T) {
         commands = Q3.closeMarket(t);
     } else {
         for (var i in stocks_id) {
@@ -599,12 +638,17 @@ for (let t = 1; t <= T;) {
 
         commands = Q3.checkPosition(sorted_trend, t - 1, market);
     }
-    // if no need to trade, continue
+    // console.log(Q3.balance);
+
+    if (commands.exit === true) {
+        console.log("error:",commands.error);
+        break;
+    }
+
     if (commands.skip === true) {
         continue;
     }
 
-
     Q3.trade(commands);
-    t++;
 }
+console.log(Q3.balance);
